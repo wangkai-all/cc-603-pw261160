@@ -1,0 +1,14 @@
+{
+  "name": "water-quality-events",
+  "version": "1.0.0",
+  "private": true,
+  "description": "水质超标事件归并、缺失观测补录与治理前后恢复时长对照的本地演示",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

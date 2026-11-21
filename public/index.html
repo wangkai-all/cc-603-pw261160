@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>水质事件时间线 · 传感器报数与换水工单分离</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">本地演示 · 传感器报数 / 换水工单分轨</p>
+        <h1>水质超标事件时间线</h1>
+        <p class="lede">
+          指标从超限持续到连续恢复被确认才封口；短间隔抖动不拆段。换水工单是独立流，
+          不参与事件截断。确认时点会随事件一并交给分析端，治理前后对照时未恢复样本单列。
+        </p>
+      </div>
+      <dl class="dataset-meta">
+        <div><dt>数据集</dt><dd id="dataset-name">—</dd></div>
+        <div><dt>治理时点</dt><dd id="split-at">—</dd></div>
+        <div><dt>规则</dt><dd id="rule-meta">—</dd></div>
+      </dl>
+    </header>
+
+    <section class="toolbar" aria-label="操作">
+      <button type="button" id="btn-generate" class="btn btn-primary">生成水质事件</button>
+      <button type="button" id="btn-impute" class="btn">补一段缺失观测</button>
+      <button type="button" id="btn-compare" class="btn">对照恢复时长</button>
+      <div class="toolbar-field">
+        <label for="window-mode">对照归并口径</label>
+        <select id="window-mode">
+          <option value="confirmed" selected>按恢复确认时点</option>
+          <option value="observed">按首个恢复观测</option>
+        </select>
+      </div>
+      <div class="toolbar-field">
+        <label for="split-at-input">治理时点（ISO）</label>
+        <input id="split-at-input" type="text" inputmode="text" autocomplete="off" spellcheck="false">
+      </div>
+      <p class="toolbar-status" id="action-status" role="status" aria-live="polite">等待操作</p>
+    </section>
+
+    <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+    <section class="results" data-evidence-result data-evidence-version="0" aria-label="业务结果">
+      <div class="stat-grid">
+        <article class="stat">
+          <h2>已确认恢复</h2>
+          <p class="stat-value" id="stat-resolved">—</p>
+          <p class="stat-note" id="stat-resolved-note">事件数</p>
+        </article>
+        <article class="stat">
+          <h2>未恢复（单列）</h2>
+          <p class="stat-value" id="stat-open">—</p>
+          <p class="stat-note" id="stat-open-note">不计入均值</p>
+        </article>
+        <article class="stat">
+          <h2>平均恢复时长</h2>
+          <p class="stat-value" id="stat-mean">—</p>
+          <p class="stat-note">分钟 · 仅已确认事件</p>
+        </article>
+        <article class="stat">
+          <h2>可补录缺口</h2>
+          <p class="stat-value" id="stat-gaps">—</p>
+          <p class="stat-note" id="stat-gaps-note">两侧均超限才可合并</p>
+        </article>
+      </div>
+
+      <section class="panel chart-panel" aria-labelledby="chart-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="chart-title">COD 观测与事件区间</h2>
+            <p class="panel-sub">阈值 50 mg/L；恢复需连续 30 分钟低于 45 mg/L。阴影为缺测区间。</p>
+          </div>
+          <ul class="legend" aria-label="图例">
+            <li><span class="swatch swatch-line"></span>COD 观测</li>
+            <li><span class="swatch swatch-threshold"></span>阈值</li>
+            <li><span class="swatch swatch-good"></span>已确认事件</li>
+            <li><span class="swatch swatch-critical"></span>未恢复</li>
+            <li><span class="swatch swatch-gap"></span>缺测</li>
+          </ul>
+        </div>
+        <div class="chart-wrap">
+          <svg id="chart" viewBox="0 0 900 320" role="img" aria-labelledby="chart-title chart-desc" preserveAspectRatio="xMidYMid meet">
+            <desc id="chart-desc">COD 时间序列，标注阈值线、缺测区间以及已确认和未恢复事件。</desc>
+          </svg>
+        </div>
+      </section>
+
+      <div class="panel-grid">
+        <section class="panel" aria-labelledby="events-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="events-title">已确认事件</h2>
+              <p class="panel-sub">时长为超限起点至恢复确认时点；首个恢复观测单独列出。</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table id="events-table">
+              <thead>
+                <tr>
+                  <th scope="col">指标</th>
+                  <th scope="col">超限起点</th>
+                  <th scope="col">首个恢复观测</th>
+                  <th scope="col">确认时点</th>
+                  <th scope="col" class="num">时长（分钟）</th>
+                  <th scope="col" class="num">峰值</th>
+                  <th scope="col">观测</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="empty" id="events-empty" hidden>尚未生成事件。</p>
+        </section>
+
+        <section class="panel" aria-labelledby="open-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="open-title">未恢复样本（单列）</h2>
+              <p class="panel-sub">不进入治理前后均值；因缺测截断的样本可补录后重新计算。</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table id="open-table">
+              <thead>
+                <tr>
+                  <th scope="col">指标</th>
+                  <th scope="col">超限起点</th>
+                  <th scope="col">最后观测</th>
+                  <th scope="col" class="num">已持续（分钟）</th>
+                  <th scope="col">原因</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="empty" id="open-empty" hidden>没有未恢复样本。</p>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="compare-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="compare-title">治理前后恢复时长对照</h2>
+            <p class="panel-sub" id="compare-sub">按所选口径把已确认事件分到治理前 / 治理后，未恢复样本始终单列。</p>
+          </div>
+          <p class="verdict" id="compare-verdict">—</p>
+        </div>
+        <div class="compare-grid">
+          <article class="compare-col">
+            <h3>治理前</h3>
+            <p class="compare-value" id="compare-before-mean">—</p>
+            <p class="compare-note" id="compare-before-note">事件数 —</p>
+          </article>
+          <article class="compare-col">
+            <h3>治理后</h3>
+            <p class="compare-value" id="compare-after-mean">—</p>
+            <p class="compare-note" id="compare-after-note">事件数 —</p>
+          </article>
+          <article class="compare-col">
+            <h3>变化</h3>
+            <p class="compare-value" id="compare-delta">—</p>
+            <p class="compare-note" id="compare-delta-note">治理后减治理前</p>
+          </article>
+          <article class="compare-col compare-pending">
+            <h3>未恢复（单列）</h3>
+            <p class="compare-value" id="compare-pending">—</p>
+            <p class="compare-note" id="compare-pending-note">不计入两侧均值</p>
+          </article>
+        </div>
+        <div class="table-scroll">
+          <table id="compare-table" aria-label="治理前后事件明细">
+            <thead>
+              <tr>
+                <th scope="col">归入</th>
+                <th scope="col">指标</th>
+                <th scope="col">超限起点</th>
+                <th scope="col">确认时点</th>
+                <th scope="col" class="num">时长（分钟）</th>
+                <th scope="col">补录</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="panel-foot" id="compare-foot"></p>
+      </section>
+
+      <div class="panel-grid">
+        <section class="panel" aria-labelledby="gaps-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="gaps-title">缺测与合并候选</h2>
+              <p class="panel-sub">缺口两侧都超限时才可补录合并；合并后的时长重新计算。</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table id="gaps-table">
+              <thead>
+                <tr>
+                  <th scope="col">指标</th>
+                  <th scope="col">缺口</th>
+                  <th scope="col" class="num">时长（分钟）</th>
+                  <th scope="col" class="num">前值 / 后值</th>
+                  <th scope="col">状态</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="empty" id="gaps-empty" hidden>没有缺测区间。</p>
+        </section>
+
+        <section class="panel" aria-labelledby="orders-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="orders-title">换水工单（独立流）</h2>
+              <p class="panel-sub">工单完成不封口事件；是否恢复只看传感器观测。</p>
+            </div>
+          </div>
+          <ul class="order-list" id="order-list"></ul>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="impute-title" id="impute-panel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2 id="impute-title">补录记录</h2>
+            <p class="panel-sub" id="impute-sub">—</p>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table id="impute-table">
+            <thead>
+              <tr>
+                <th scope="col">编号</th>
+                <th scope="col">指标</th>
+                <th scope="col">缺口</th>
+                <th scope="col" class="num">补录条数</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <footer class="page-footer">
+      <p>数据为本地造数；规则参数：迟滞区间 10%、恢复连续 30 分钟、最大采样间隔 15 分钟。</p>
+      <p>接口：<code>/api/state</code> · <code>/api/events/generate</code> · <code>/api/impute</code> · <code>/api/compare</code></p>
+    </footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
